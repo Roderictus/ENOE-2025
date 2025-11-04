@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Económico de México</title>
+    
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #f4f7f6;
+            --card-bg: #ffffff;
+            --text-color: #333;
+            --header-color: #2c3e50;
+            --accent-color: #3498db;
+            --shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            text-align: center;
+            padding: 20px 0;
+            border-bottom: 2px solid var(--accent-color);
+            margin-bottom: 30px;
+        }
+        header h1 {
+            color: var(--header-color);
+            margin: 0;
+        }
+        .dashboard-grid {
+            display: grid;
+            /* Crea un grid responsivo */
+            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            gap: 25px;
+        }
+        .chart-card {
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+        .chart-card:hover {
+            box-shadow: 0 6px 16px rgba(0,0,0,0.1);
+            transform: translateY(-5px);
+        }
+        /* Estilos para que Plotly sea responsivo */
+        .js-plotly-plot .plotly .main-svg {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            font-size: 0.9em;
+            color: #777;
+        }
+        /* Media query para pantallas más pequeñas */
+        @media (max-width: 640px) {
+            .dashboard-grid {
+                /* Apila las gráficas en móviles */
+                grid-template-columns: 1fr;
+                min-width: 0;
+            }
+            body {
+                padding: 5px;
+            }
+            .container {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Dashboard de Indicadores Económicos de México (2005-2025)</h1>
+        <p>Análisis de variables pecuniarias (deflactadas) y no pecuniarias.</p>
+    </header>
+
+    <main class="container">
+        <div class="dashboard-grid">
+            
+            <div class="chart-card">
+                <div id="chart-ingresos-reales"></div>
+            </div>
+            
+            <div class="chart-card">
+                <div id="chart-tasa-informal"></div>
+            </div>
+
+            <div class="chart-card">
+                <div id="chart-pea"></div>
+            </div>
+            
+            <div class="chart-card">
+                <div id="chart-subocupacion"></div>
+            </div>
+
+        </div>
+    </main>
+
+    <footer>
+        <p>Datos procesados a partir de fuentes oficiales (p.ej. INEGI). Base del deflactor: T1 2005 = 100.</p>
+    </footer>
+
+    <script>
+        
+        // ******************************************************
+        // PEGA AQUÍ LA SALIDA JSON DEL SCRIPT DE PYTHON (PASO 1)
+        // Reemplaza el '[]' vacío con la salida de tu terminal.
+        // ******************************************************
+        const data = []; // <-- PEGA AQUÍ TU JSON. Ej: const data = [{"periodo":"2005.0-T1.0", ...}, ...];
+        
+        
+        // --- Cuando la ventana cargue, dibuja las gráficas ---
+        window.onload = function() {
+            if (data.length === 0) {
+                console.error("Los datos no se cargaron. Pega el JSON del script de Python.");
+                alert("Error: Los datos no se cargaron. Revisa la consola y el archivo HTML.");
+                return;
+            }
+
+            // Configuración común para todas las gráficas
+            const layoutCommon = {
+                autosize: true,
+                margin: { l: 60, r: 30, b: 50, t: 70 },
+                hovermode: 'x unified',
+                legend: {
+                    orientation: 'h',
+                    yanchor: 'bottom',
+                    y: 1.02,
+                    xanchor: 'right',
+                    x: 1
+                },
+                xaxis: { title: 'Fecha' }
+            };
+
+            // --- Gráfica 1: Ingresos Reales vs Nominales ---
+            const trace1_ing = {
+                x: data.map(d => d.fecha),
+                y: data.map(d => d.ing_prom_mes_total),
+                name: 'Ingreso Nominal',
+                type: 'scatter',
+                line: { color: 'grey', dash: 'dot' }
+            };
+            const trace2_ing = {
+                x: data.map(d => d.fecha),
+                y: data.map(d => d.ing_prom_mes_real),
+                name: 'Ingreso Real (Base 2005)',
+                type: 'scatter',
+                line: { color: 'green', width: 3 }
+            };
+            const layout_ing = {
+                ...layoutCommon,
+                title: 'Ingreso Promedio Mensual (Nominal vs. Real)',
+                yaxis: { title: 'Ingreso (MXN)' }
+            };
+            Plotly.newPlot('chart-ingresos-reales', [trace1_ing, trace2_ing], layout_ing, {responsive: true});
+
+            
+            // --- Gráfica 2: Tasa de Informalidad ---
+            // (Calculamos la tasa aquí en JS)
+            const tasa_informal = data.map(d => (d.ocupacion_informal / d.ocupada_total) * 100);
+            const trace_informal = {
+                x: data.map(d => d.fecha),
+                y: tasa_informal,
+                name: 'Tasa de Informalidad',
+                type: 'scatter',
+                fill: 'tozeroy',
+                line: { color: '#e74c3c' }
+            };
+            const layout_informal = {
+                ...layoutCommon,
+                title: 'Tasa de Ocupación Informal (%)',
+                yaxis: { title: 'Porcentaje (%)' }
+            };
+            Plotly.newPlot('chart-tasa-informal', [trace_informal], layout_informal, {responsive: true});
+
+
+            // --- Gráfica 3: Población Ocupada vs Desocupada ---
+            const trace1_pea = {
+                x: data.map(d => d.fecha),
+                y: data.map(d => d.ocupada_total),
+                name: 'Ocupados',
+                type: 'scatter',
+                line: { color: '#2980b9' }
+            };
+            const trace2_pea = {
+                x: data.map(d => d.fecha),
+                y: data.map(d => d.desocupada_total),
+                name: 'Desocupados',
+                type: 'scatter',
+                line: { color: '#f39c12' }
+            };
+            const layout_pea = {
+                ...layoutCommon,
+                title: 'Población Ocupada vs. Desocupada',
+                yaxis: { title: 'Millones de Personas' }
+            };
+            Plotly.newPlot('chart-pea', [trace1_pea, trace2_pea], layout_pea, {responsive: true});
+
+
+            // --- Gráfica 4: Subocupación ---
+            const trace_sub = {
+                x: data.map(d => d.fecha),
+                y: data.map(d => d.subocupacion),
+                name: 'Subocupados',
+                type: 'scatter',
+                fill: 'tozeroy',
+                line: { color: '#8e44ad' }
+            };
+            const layout_sub = {
+                ...layoutCommon,
+                title: 'Población Subocupada',
+                yaxis: { title: 'Personas' }
+            };
+            Plotly.newPlot('chart-subocupacion', [trace_sub], layout_sub, {responsive: true});
+
+        };
+    </script>
+
+</body>
+</html>
