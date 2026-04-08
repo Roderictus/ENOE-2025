@@ -1,9 +1,10 @@
 import pandas as pd
 import numpy as np
-import os
 
-def procesar_top50_profesiones():
-    # 1. Definir rutas a los microdatos (Ajusta la ruta si es necesario)
+def procesar_top50_profesiones_completo():
+    # =========================================================================
+    # 1. RUTAS DE LOS ARCHIVOS (Ajusta si están en otra carpeta)
+    # =========================================================================
     path_sdemt = "Data/ENOE_dta/ENOE_2025_4/ENOE_SDEMT425.dta"
     path_coe1t = "Data/ENOE_dta/ENOE_2025_4/ENOE_COE1T425.dta"
 
@@ -15,7 +16,7 @@ def procesar_top50_profesiones():
         df_coe1t = pd.read_stata(path_coe1t, convert_categoricals=False)
         df_coe1t.columns = df_coe1t.columns.str.lower()
         
-        # Estandarizar nombre de entidad
+        # Estandarizar nombre de la entidad federativa
         if 'cve_ent' not in df_sdemt.columns and 'ent' in df_sdemt.columns:
             df_sdemt.rename(columns={'ent': 'cve_ent'}, inplace=True)
         if 'cve_ent' not in df_coe1t.columns and 'ent' in df_coe1t.columns:
@@ -25,10 +26,11 @@ def procesar_top50_profesiones():
         col_sinco = 'sinco' if 'sinco' in df_coe1t.columns else 'p3'
         
         PONDERATOR = 'fac_tri' if 'fac_tri' in df_sdemt.columns else 'fac'
-        cols_sdemt = llaves_merge + [PONDERATOR, 'r_def', 'c_res', 'eda', 'clase1', 'clase2', 'ingocup', 'sex', 'hrsocup']
+        
+        # Añadido: emp_ppal (necesario para calcular % Formal)
+        cols_sdemt = llaves_merge + [PONDERATOR, 'r_def', 'c_res', 'eda', 'clase1', 'clase2', 'ingocup', 'sex', 'hrsocup', 'emp_ppal']
         cols_coe1t = llaves_merge + [col_sinco]
         
-        # Filtrar columnas para no saturar memoria RAM
         df_sdemt = df_sdemt[[c for c in cols_sdemt if c in df_sdemt.columns]]
         df_coe1t = df_coe1t[[c for c in cols_coe1t if c in df_coe1t.columns]]
         
@@ -38,33 +40,36 @@ def procesar_top50_profesiones():
         df_merge['r_def'] = df_merge['r_def'].astype(str).str.strip()
         
         # =========================================================================
-        # UNIVERSO 1: POBLACIÓN OCUPADA TOTAL (Para el volumen de la profesión)
+        # 2. DEFINIR UNIVERSOS: OCUPADOS TOTALES E INGRESOS POSITIVOS
         # =========================================================================
         df_ocupados = df_merge[(df_merge['r_def'] == '0.0') & 
                                (df_merge['c_res'].isin([1, 3])) & 
                                (df_merge['eda'] >= 15) & 
                                (df_merge['clase1'] == 1) & 
                                (df_merge['clase2'] == 1)].copy()
-                               
-        df_ocupados['codigo_profesion'] = df_ocupados[col_sinco].astype(str).str.split('.').str[0].str.zfill(4)
+        
+        # Limpiar códigos
+        def clean_code(x):
+            if pd.isna(x): return x
+            x = str(x).strip()
+            if x == '0nan' or x.lower() == 'nan': return '0nan'
+            try:
+                return str(int(float(x))).zfill(4)
+            except:
+                return x
+
+        df_ocupados['codigo_profesion'] = df_ocupados[col_sinco].apply(clean_code)
         total_ocupados_nacional = df_ocupados[PONDERATOR].sum()
 
-        # =========================================================================
-        # UNIVERSO 2: POBLACIÓN CON INGRESO > 0 (Para métricas salariales y horas)
-        # =========================================================================
         df_ocupados['ingocup'] = pd.to_numeric(df_ocupados['ingocup'], errors='coerce').fillna(0)
         df_ocupados['hrsocup'] = pd.to_numeric(df_ocupados['hrsocup'], errors='coerce').fillna(0)
         
         df_ing = df_ocupados[df_ocupados['ingocup'] > 0].copy()
         
-        # Calcular horas mensuales (horas a la semana * 4.345 semanas promedio por mes)
         df_ing['horas_mensuales'] = df_ing['hrsocup'] * 4.345
-        
-        # Filtrar casos de 0 horas para evitar división entre cero al calcular ingresos por hora
         df_ing_hrs = df_ing[df_ing['horas_mensuales'] > 0].copy()
         df_ing_hrs['ingreso_hora'] = df_ing_hrs['ingocup'] / df_ing_hrs['horas_mensuales']
 
-        # Función matemática para promedios ponderados
         def weighted_avg(df_filtered, val_col):
             if df_filtered.empty: return np.nan
             val = df_filtered[val_col].values
@@ -73,36 +78,43 @@ def procesar_top50_profesiones():
             if not valid.any() or wt[valid].sum() == 0: return np.nan
             return np.average(val[valid], weights=wt[valid])
 
-        print("Calculando métricas y brechas salariales por profesión...")
+        print("Calculando todas las métricas (Ingresos, Horas, Género, Formalidad)...")
         resultados = []
         
-        # Iterar sobre cada código de profesión
         for cod in df_ocupados['codigo_profesion'].unique():
             g_total = df_ocupados[df_ocupados['codigo_profesion'] == cod]
             g_ing = df_ing[df_ing['codigo_profesion'] == cod]
             g_hrs = df_ing_hrs[df_ing_hrs['codigo_profesion'] == cod]
             
-            personas = g_total[PONDERATOR].sum()
-            if personas == 0: continue
+            personas_total = g_total[PONDERATOR].sum()
+            if personas_total == 0: continue
+            
+            # Cálculos adicionales requeridos
+            personas_formales = g_total[g_total['emp_ppal'] == 2][PONDERATOR].sum()
+            personas_hombres = g_total[g_total['sex'] == 1][PONDERATOR].sum()
+            personas_ing_pos = g_ing[PONDERATOR].sum()
                 
             resultados.append({
                 'Código SINCO': cod,
-                'Personas (Total Ocupados)': personas,
-                '% de la PEA Ocupada': (personas / total_ocupados_nacional) * 100,
+                'Personas (Total Ocupados)': personas_total,
+                '% de la PEA Ocupada': (personas_total / total_ocupados_nacional) * 100,
+                '%Formal': (personas_formales / personas_total) * 100 if personas_total > 0 else 0,
+                '%Hombres': (personas_hombres / personas_total) * 100 if personas_total > 0 else 0,
                 'Horas Mensuales Trabajadas': weighted_avg(g_hrs, 'horas_mensuales'),
                 'Ingreso Mensual Promedio': weighted_avg(g_ing, 'ingocup'),
                 'Ingreso x Hora (General)': weighted_avg(g_hrs, 'ingreso_hora'),
                 'Ingreso x Hora (Hombres)': weighted_avg(g_hrs[g_hrs['sex'] == 1], 'ingreso_hora'),
-                'Ingreso x Hora (Mujeres)': weighted_avg(g_hrs[g_hrs['sex'] == 2], 'ingreso_hora')
+                'Ingreso x Hora (Mujeres)': weighted_avg(g_hrs[g_hrs['sex'] == 2], 'ingreso_hora'),
+                'Personas con ingresos positivos': personas_ing_pos,
+                'Personas con ingresos positivos como % de Personas de la PEA Ocupada': (personas_ing_pos / personas_total) * 100 if personas_total > 0 else 0
             })
             
-        # Tomar el Top 50 con más personas
+        # Ordenar por el volumen total de personas en la profesión
         df_res = pd.DataFrame(resultados).sort_values(by='Personas (Total Ocupados)', ascending=False).head(50)
         
         # =========================================================================
-        # MAPEO DE PROFESIONES (Catálogo SINCO 2019 Local)
+        # 3. MAPEO DE PROFESIONES (Catálogo Consolidado)
         # =========================================================================
-        # Extraído de la estructura oficial validada para los códigos más comunes
         cat_map = {
             '4211': 'Empleados de ventas y dependientes en comercios',
             '4111': 'Comerciantes en establecimientos',
@@ -155,34 +167,66 @@ def procesar_top50_profesiones():
             '8131': 'Operadores de máquinas de coser',
             '7122': 'Techadores y colocadores de pisos',
             '5112': 'Cantineros y preparadores de bebidas',
+            '2332': 'Profesores de enseñanza primaria',
+            '2632': 'Mecánicos en mantenimiento y reparación de vehículos de motor',
+            '9411': 'Ayudantes en la preparación de alimentos',
+            '9231': 'Trabajadores de apoyo en elaboración y mantenimiento de equipos',
+            '5211': 'Peluqueros, barberos, estilistas y peinadores',
+            '8212': 'Ensambladores de partes eléctricas y electrónicas',
+            '2135': 'Abogados',
+            '8344': 'Conductores de motocicleta',
+            '2512': 'Auxiliares en contabilidad, finanzas y agentes de bolsa',
+            '8211': 'Ensambladores de maquinaria, equipos y productos metálicos',
+            '7341': 'Sastres, modistos, costureras y confeccionadores',
+            '2271': 'Desarrolladores y analistas de software y multimedia',
+            '9236': 'Trabajadores de apoyo en la industria de alimentos y bebidas',
+            '2436': 'Enfermeras y paramédicos profesionales',
+            '8101': 'Supervisores de operadores de maquinaria industrial',
+            '9331': 'Cargadores',
+            '3211': 'Recepcionistas y trabajadores que brindan información',
+            '4224': 'Vendedores por catálogo',
+            '8133': 'Operadores de máquinas para productos de plástico y hule',
+            '8153': 'Operadores de máquinas de costura, bordado y de corte',
+            '4221': 'Agentes y representantes de ventas y consignatarios',
             '0nan': 'Ocupación no especificada / Nulos'
         }
         
-        # Insertar el nombre mapeado (si el código no está, deja el código más el aviso)
         df_res.insert(1, 'Profesión', df_res['Código SINCO'].map(cat_map).fillna("Código " + df_res['Código SINCO'] + " (SINCO)"))
 
+        # =========================================================================
+        # 4. ORDEN FINAL Y REDONDEO
+        # =========================================================================
+        columnas_finales = [
+            'Código SINCO',
+            'Profesión',
+            'Personas (Total Ocupados)',
+            '% de la PEA Ocupada',
+            '%Formal',
+            '%Hombres',
+            'Horas Mensuales Trabajadas',
+            'Ingreso Mensual Promedio',
+            'Ingreso x Hora (General)',
+            'Ingreso x Hora (Hombres)',
+            'Ingreso x Hora (Mujeres)',
+            'Personas con ingresos positivos',
+            'Personas con ingresos positivos como % de Personas de la PEA Ocupada'
+        ]
+        
+        df_res = df_res[columnas_finales]
+
+        # Redondear números a un decimal
+        numeric_cols = df_res.select_dtypes(include=['float64']).columns
+        df_res[numeric_cols] = df_res[numeric_cols].round(1)
+
         # Guardar en CSV
-        output_filename = "Top_50_Profesiones_Analisis_Horas.csv"
+        output_filename = "Top_50_Profesiones_Final_Completo.csv"
         df_res.to_csv(output_filename, index=False, encoding='utf-8-sig')
         
-        print("\n" + "="*90)
-        print(" NOTA METODOLÓGICA PARA 'MÉXICO EN DATOS':")
-        print(" -> 'Personas (Total Ocupados)' equivale al volumen total de la profesión (100%).")
-        print(" -> 'Ingreso Mensual', 'Horas Mensuales' y los cálculos de 'Ingreso por Hora'")
-        print("    se evaluaron AISLANDO a la población que reporta ingresos positivos.")
-        print("="*90 + "\n")
+        print("\n¡Éxito! El archivo CSV se ha generado con todas las columnas ordenadas.")
+        print(f"Búscalo como: '{output_filename}' en tu carpeta.\n")
         
-        print(f"¡Éxito! El reporte Top 50 se ha guardado localmente como: '{output_filename}'")
-        
-        # Imprimir un extracto limpio de las primeras 15 en consola
-        pd.options.display.float_format = '{:,.2f}'.format
-        cols_print = ['Profesión', 'Personas (Total Ocupados)', 'Horas Mensuales Trabajadas', 
-                      'Ingreso x Hora (General)', 'Ingreso x Hora (Hombres)', 'Ingreso x Hora (Mujeres)']
-        print("\n--- EXTRACTO: TOP 15 PROFESIONES ---")
-        print(df_res.head(15)[cols_print].to_string(index=False))
-
     except Exception as e:
-        print(f"Ocurrió un error al procesar las bases: {e}")
+        print(f"Ocurrió un error: {e}")
 
 if __name__ == '__main__':
-    procesar_top50_profesiones()
+    procesar_top50_profesiones_completo()
