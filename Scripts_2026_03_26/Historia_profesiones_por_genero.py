@@ -6,7 +6,6 @@ import gc
 # =========================================================================
 # 1. CONFIGURACIÓN Y DICCIONARIOS
 # =========================================================================
-# INPC Histórico (Base 2018=100)
 inpc_historico = [
     58.821, 59.137, 59.404, 60.118, 60.913, 60.928, 61.517, 62.575,
     63.460, 63.464, 63.745, 65.185, 66.108, 66.683, 67.630, 69.130,
@@ -71,9 +70,8 @@ def weighted_avg(df_filtered, val_col, wt_col):
 # =========================================================================
 # 2. EXTRACCIÓN HISTÓRICA (A PARTIR DE 2012-T3)
 # =========================================================================
-print("Iniciando extracción histórica desde 2012-T3...")
+print("Iniciando extracción histórica de Profesiones desde 2012-T3...")
 resultados_profesiones = []
-resultados_macro = []
 
 for year in range(2012, 2026):
     for quarter in range(1, 5):
@@ -108,18 +106,9 @@ for year in range(2012, 2026):
             df_merge[PONDERATOR] = pd.to_numeric(df_merge[PONDERATOR], errors='coerce').fillna(0)
             df_merge['r_def'] = df_merge['r_def'].astype(str).str.strip()
             
-            # --- CÁLCULOS MACRO (NACIONALES) ---
-            # 1. Filtro PEA Total (Clase1 == 1)
-            df_pea = df_merge[(df_merge['r_def'] == '0.0') & (df_merge['c_res'].isin([1, 3])) & 
-                              (df_merge['eda'] >= 15) & (df_merge['clase1'] == 1)].copy()
-            
-            pea_hombres = df_pea[df_pea['sex'] == 1][PONDERATOR].sum()
-            pea_mujeres = df_pea[df_pea['sex'] == 2][PONDERATOR].sum()
-            
-            # 2. Filtro Ocupados (Clase2 == 1)
-            df_oc = df_pea[df_pea['clase2'] == 1].copy()
-            oc_hombres = df_oc[df_oc['sex'] == 1][PONDERATOR].sum()
-            oc_mujeres = df_oc[df_oc['sex'] == 2][PONDERATOR].sum()
+            # Filtro PEA Ocupada
+            df_oc = df_merge[(df_merge['r_def'] == '0.0') & (df_merge['c_res'].isin([1, 3])) & 
+                             (df_merge['eda'] >= 15) & (df_merge['clase1'] == 1) & (df_merge['clase2'] == 1)].copy()
 
             def clean_2d(x):
                 if pd.isna(x): return '00'
@@ -132,29 +121,13 @@ for year in range(2012, 2026):
             df_oc['ingocup'] = pd.to_numeric(df_oc['ingocup'], errors='coerce').fillna(0)
             df_oc['hrsocup'] = pd.to_numeric(df_oc['hrsocup'], errors='coerce').fillna(0)
             
-            # 3. Filtro Ingresos Positivos (> 0)
             df_ing = df_oc[df_oc['ingocup'] > 0].copy()
             df_ing['horas_mes'] = df_ing['hrsocup'] * 4.345
             df_ing_hrs = df_ing[df_ing['horas_mes'] > 0].copy()
             df_ing_hrs['ing_hora'] = df_ing_hrs['ingocup'] / df_ing_hrs['horas_mes']
             
-            ing_pos_hombres = df_ing[df_ing['sex'] == 1][PONDERATOR].sum()
-            ing_pos_mujeres = df_ing[df_ing['sex'] == 2][PONDERATOR].sum()
-
-            # Guardar tabla Macro Nacional
-            resultados_macro.append({
-                'Periodo': f"{year}-T{quarter}",
-                'PEA_Nacional_Hombres': pea_hombres,
-                'PEA_Nacional_Mujeres': pea_mujeres,
-                'Ocupados_Nacional_Hombres': oc_hombres,
-                'Ocupados_Nacional_Mujeres': oc_mujeres,
-                'IngresosPositivos_Nacional_Hombres': ing_pos_hombres,
-                'IngresosPositivos_Nacional_Mujeres': ing_pos_mujeres
-            })
-            
             deflactor = DEFLACTOR_DICT.get((year, quarter), 100)
 
-            # --- CÁLCULOS MICRO (POR PROFESIÓN) ---
             for cod in df_oc['cod_2d'].unique():
                 g_tot = df_oc[df_oc['cod_2d'] == cod]
                 g_ing = df_ing[df_ing['cod_2d'] == cod]
@@ -163,10 +136,8 @@ for year in range(2012, 2026):
                 personas = g_tot[PONDERATOR].sum()
                 if personas == 0: continue
                 
-                # Desglose por género en la profesión
                 hombres_oc_prof = g_tot[g_tot['sex'] == 1][PONDERATOR].sum()
                 mujeres_oc_prof = g_tot[g_tot['sex'] == 2][PONDERATOR].sum()
-                
                 hombres_ing_prof = g_ing[g_ing['sex'] == 1][PONDERATOR].sum()
                 mujeres_ing_prof = g_ing[g_ing['sex'] == 2][PONDERATOR].sum()
                 
@@ -181,45 +152,60 @@ for year in range(2012, 2026):
                 hrs_mes = weighted_avg(g_hrs, 'horas_mes', PONDERATOR)
                 
                 resultados_profesiones.append({
-                    'year': year, 'quarter': quarter, 'Periodo': f"{year}-T{quarter}",
-                    'Codigo': cod, 
+                    'Periodo': f"{year}-T{quarter}",
+                    'Codigo_SINCO': cod, 
                     'Ocupados_Total': personas,
                     'Ocupados_Hombres': hombres_oc_prof,
                     'Ocupados_Mujeres': mujeres_oc_prof,
                     'Con_Ingreso_Hombres': hombres_ing_prof,
                     'Con_Ingreso_Mujeres': mujeres_ing_prof,
-                    'Ratio_Formal': ratio_formal, 
+                    'Ratio_Formalidad': ratio_formal, 
                     'Ratio_HombreMujer': ratio_genero,
                     'Horas_Mensuales': hrs_mes,
-                    'Ing_Mensual_Real': (ing_mensual_nom / deflactor) * 100 if pd.notna(ing_mensual_nom) else np.nan,
-                    'Ing_Hora_Real': (ing_hora_nom / deflactor) * 100 if pd.notna(ing_hora_nom) else np.nan
+                    'Ingreso_Mensual_Real': (ing_mensual_nom / deflactor) * 100 if pd.notna(ing_mensual_nom) else np.nan,
+                    'Ingreso_Hora_Real': (ing_hora_nom / deflactor) * 100 if pd.notna(ing_hora_nom) else np.nan
                 })
                 
-            del df_sdemt, df_coe1t, df_merge, df_pea, df_oc, df_ing, df_ing_hrs
+            del df_sdemt, df_coe1t, df_merge, df_oc, df_ing, df_ing_hrs
             gc.collect()
             
         except Exception as e:
             print(f"Error procesando {year}-T{quarter}: {e}")
 
 # =========================================================================
-# 3. EXPORTACIÓN MACROECONÓMICA NACIONAL
-# =========================================================================
-df_macro = pd.DataFrame(resultados_macro)
-df_macro.to_csv("Evolucion_Macro_Genero_2012_2025.csv", index=False, encoding='utf-8-sig')
-print("\nBase de datos Nacional de Género (PEA vs Ocupados) guardada: 'Evolucion_Macro_Genero_2012_2025.csv'")
-
-# =========================================================================
-# 4. EXPORTACIÓN TOP 10 PROFESIONES
+# 3. FORMATO LATAM Y EXPORTACIÓN DEL TOP 10 PROFESIONES
 # =========================================================================
 df_prof = pd.DataFrame(resultados_profesiones)
-top10_codigos = df_prof.groupby('Codigo')['Ocupados_Total'].sum().sort_values(ascending=False).head(10).index.tolist()
-df_top10 = df_prof[df_prof['Codigo'].isin(top10_codigos)].copy()
 
-df_top10.insert(4, 'Profesión', df_top10['Codigo'].map(cat_map_2d).fillna("Cód: " + df_top10['Codigo']))
+# Identificar Top 10 Grupos Ocupacionales
+top10_codigos = df_prof.groupby('Codigo_SINCO')['Ocupados_Total'].sum().sort_values(ascending=False).head(10).index.tolist()
+df_top10 = df_prof[df_prof['Codigo_SINCO'].isin(top10_codigos)].copy()
 
-# Formato LATAM (opcional, redondear y usar comas si vas a Google Sheets directamente)
-for col in ['Ocupados_Total', 'Ocupados_Hombres', 'Ocupados_Mujeres', 'Con_Ingreso_Hombres', 'Con_Ingreso_Mujeres']:
-    df_top10[col] = df_top10[col].round(0)
+# Mapear nombres
+df_top10.insert(2, 'Profesión', df_top10['Codigo_SINCO'].map(cat_map_2d).fillna("Cód: " + df_top10['Codigo_SINCO']))
 
-df_top10.to_csv("Evolucion_Top10_SINCO_Genero_2012_2025.csv", index=False, encoding='utf-8-sig')
-print("Base de datos de Profesiones guardada: 'Evolucion_Top10_SINCO_Genero_2012_2025.csv'")
+# --- PROCESO DE REDONDEO ---
+# 1. Variables de personas -> Enteros (0 decimales)
+int_cols = ['Ocupados_Total', 'Ocupados_Hombres', 'Ocupados_Mujeres', 'Con_Ingreso_Hombres', 'Con_Ingreso_Mujeres']
+for col in int_cols:
+    df_top10[col] = df_top10[col].fillna(0).round(0).astype(int).astype(str)
+
+# 2. Variables de dinero/tiempo -> 1 decimal
+dec_1_cols = ['Horas_Mensuales', 'Ingreso_Mensual_Real', 'Ingreso_Hora_Real']
+for col in dec_1_cols:
+    df_top10[col] = df_top10[col].round(1).astype(str).str.replace('.', ',')
+
+# 3. Variables de Ratios -> 2 decimales
+dec_2_cols = ['Ratio_Formalidad', 'Ratio_HombreMujer']
+for col in dec_2_cols:
+    df_top10[col] = df_top10[col].round(2).astype(str).str.replace('.', ',')
+
+# Reemplazar 'nan' con vacío para celdas limpias en Excel/Sheets
+df_top10.replace('nan', '', inplace=True)
+
+# Guardar en CSV separado por punto y coma para lectura nativa en Google Sheets / Excel
+output_file = "Evolucion_Top10_SINCO_Genero_LATAM.csv"
+df_top10.to_csv(output_file, sep=';', index=False, encoding='utf-8-sig')
+
+print(f"\n¡Análisis finalizado y redondeado!")
+print(f"Base de datos de Profesiones guardada y optimizada para Sheets: '{output_file}'")
