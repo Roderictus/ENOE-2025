@@ -16,6 +16,7 @@ def procesar_profesiones_1_digito_completo():
         df_sdemt.columns = df_sdemt.columns.str.lower()
         
         df_coe1t = pd.read_stata(path_coe1t, convert_categoricals=False)
+        
         df_coe1t.columns = df_coe1t.columns.str.lower()
         
         # Estandarizar nombre de la entidad federativa
@@ -36,6 +37,7 @@ def procesar_profesiones_1_digito_completo():
         df_coe1t = df_coe1t[[c for c in cols_coe1t if c in df_coe1t.columns]]
         
         print("Fusionando bases de datos...")
+        df_coe1t = df_coe1t.drop_duplicates(subset=llaves_merge)
         df_merge = pd.merge(df_sdemt, df_coe1t, on=llaves_merge, how='inner')
         df_merge[PONDERATOR] = pd.to_numeric(df_merge[PONDERATOR], errors='coerce').fillna(0)
         df_merge['r_def'] = df_merge['r_def'].astype(str).str.strip()
