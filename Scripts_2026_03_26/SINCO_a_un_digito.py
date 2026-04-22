@@ -186,7 +186,7 @@ def procesar_profesiones_1_digito_completo():
             df_res[col] = df_res[col].fillna(0).round(1).astype(str).str.replace('.', ',')
 
         # Exportar a CSV con punto y coma
-        output_filename = "Grupos_Profesionales_Agregados_1D_LATAM.csv"
+        output_filename = "Grupos_Profesionales_Agregados_1D_PEA_total_correcta.csv"
         df_res.to_csv(output_filename, sep=';', index=False, encoding='utf-8-sig')
         
         print("\n" + "="*80)
