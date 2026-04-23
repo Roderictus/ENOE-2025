@@ -1,202 +1,256 @@
 import pandas as pd
 import numpy as np
 import os
-import gc
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import seaborn as sns
+from datetime import datetime
+import warnings
+warnings.filterwarnings("ignore")
 
-def procesar_profesiones_1_digito_completo():
+def procesar_sectores_y_ramas_economicas():
     # =========================================================================
-    # 1. RUTAS DE LOS ARCHIVOS
+    # 0. CONFIGURACIÓN DE DIRECTORIOS Y PREFIJOS
     # =========================================================================
-    path_sdemt = "Data/ENOE_dta/ENOE_2025_4/ENOE_SDEMT425.dta"
-    path_coe1t = "Data/ENOE_dta/ENOE_2025_4/ENOE_COE1T425.dta"
+    dir_graficas = "Resultados_Graficas"
+    dir_bases = "Resultados Bases"
+    
+    os.makedirs(dir_graficas, exist_ok=True)
+    os.makedirs(dir_bases, exist_ok=True)
+    
+    fecha_prefix = datetime.now().strftime("%Y%m%d_")
 
-    print("Cargando bases de datos (SDEMT y COE1T)...")
-    try:
-        df_sdemt = pd.read_stata(path_sdemt, convert_categoricals=False)
-        df_sdemt.columns = df_sdemt.columns.str.lower()
-        
-        df_coe1t = pd.read_stata(path_coe1t, convert_categoricals=False)
-        
-        df_coe1t.columns = df_coe1t.columns.str.lower()
-        
-        # Estandarizar nombre de la entidad federativa
-        if 'cve_ent' not in df_sdemt.columns and 'ent' in df_sdemt.columns:
-            df_sdemt.rename(columns={'ent': 'cve_ent'}, inplace=True)
-        if 'cve_ent' not in df_coe1t.columns and 'ent' in df_coe1t.columns:
-            df_coe1t.rename(columns={'ent': 'cve_ent'}, inplace=True)
+    # =========================================================================
+    # 1. INPC HISTÓRICO (Base 2018) Y DICCIONARIOS
+    # =========================================================================
+    inpc_historico = [
+        58.821, 59.137, 59.404, 60.118, 60.913, 60.928, 61.517, 62.575,
+        63.460, 63.464, 63.745, 65.185, 66.108, 66.683, 67.630, 69.130,
+        70.026, 70.544, 70.996, 71.812, 73.328, 73.249, 73.805, 74.751,
+        75.576, 75.422, 75.745, 77.266, 78.807, 78.579, 79.451, 80.662,
+        81.866, 82.345, 82.450, 83.813, 85.365, 85.296, 85.841, 87.338,
+        88.050, 87.874, 88.195, 89.383, 90.445, 90.201, 90.753, 92.382,
+        95.047, 95.735, 96.637, 98.477, 100.087, 100.025, 101.133, 102.957,
+        103.929, 104.115, 104.556, 106.067, 107.538, 107.029, 108.307, 109.473,
+        111.497, 113.048, 114.577, 117.114, 119.580, 121.832, 124.326, 126.495,
+        128.538, 128.844, 130.126, 132.100, 133.767, 134.339, 136.032, 137.400,
+        138.743, 140.012, 140.948, 142.465, 144.150
+    ]
 
-        llaves_merge = ['cd_a', 'cve_ent', 'con', 'v_sel', 'n_hog', 'h_mud', 'n_ren']
-        col_sinco = 'sinco' if 'sinco' in df_coe1t.columns else 'p3'
-        
-        PONDERATOR = 'fac_tri' if 'fac_tri' in df_sdemt.columns else 'fac'
-        
-        cols_sdemt = llaves_merge + [PONDERATOR, 'r_def', 'c_res', 'eda', 'clase1', 'clase2', 'ingocup', 'sex', 'hrsocup', 'emp_ppal']
-        cols_coe1t = llaves_merge + [col_sinco]
-        
-        df_sdemt = df_sdemt[[c for c in cols_sdemt if c in df_sdemt.columns]]
-        df_coe1t = df_coe1t[[c for c in cols_coe1t if c in df_coe1t.columns]]
-        
-        print("Fusionando bases de datos...")
-        df_coe1t = df_coe1t.drop_duplicates(subset=llaves_merge)
-        df_merge = pd.merge(df_sdemt, df_coe1t, on=llaves_merge, how='inner')
-        df_merge[PONDERATOR] = pd.to_numeric(df_merge[PONDERATOR], errors='coerce').fillna(0)
-        df_merge['r_def'] = df_merge['r_def'].astype(str).str.strip()
-        
-        # =========================================================================
-        # 2. UNIVERSOS Y AGREGACIÓN A 1 DÍGITO
-        # =========================================================================
-        df_ocupados = df_merge[(df_merge['r_def'] == '0.0') & 
-                               (df_merge['c_res'].isin([1, 3])) & 
-                               (df_merge['eda'] >= 15) & 
-                               (df_merge['clase1'] == 1) & 
-                               (df_merge['clase2'] == 1)].copy()
-        
-        # Función ajustada para extraer SÓLO EL PRIMER DÍGITO
-        def get_1digit_code(x):
-            if pd.isna(x): return '0'
-            x = str(x).strip()
-            if x == '0nan' or x.lower() == 'nan': return '0'
-            try:
-                # Convertir a 4 dígitos para estabilizar, luego tomar el primero
-                return str(int(float(x))).zfill(4)[:1]
-            except:
-                return '0'
+    DEFLACTOR_DICT = {}
+    idx = 0
+    for y in range(2005, 2027):
+        for q in range(1, 5):
+            if idx < len(inpc_historico):
+                DEFLACTOR_DICT[(y, q)] = inpc_historico[idx]
+                idx += 1
 
-        df_ocupados['codigo_1d'] = df_ocupados[col_sinco].apply(get_1digit_code)
-        total_ocupados_nacional = df_ocupados[PONDERATOR].sum()
+    dict_ramas = {
+        1: 'Agricultura y ganadería',
+        2: 'Industria extractiva y electricidad',
+        3: 'Industria manufacturera',
+        4: 'Construcción',
+        5: 'Comercio',
+        6: 'Restaurantes y alojamiento',
+        7: 'Transportes y comunicaciones',
+        8: 'Servicios profesionales y corporativos',
+        9: 'Servicios sociales',
+        10: 'Servicios diversos',
+        11: 'Gobierno y org. internacionales'
+    }
 
-        df_ocupados['ingocup'] = pd.to_numeric(df_ocupados['ingocup'], errors='coerce').fillna(0)
-        df_ocupados['hrsocup'] = pd.to_numeric(df_ocupados['hrsocup'], errors='coerce').fillna(0)
-        
-        df_ing = df_ocupados[df_ocupados['ingocup'] > 0].copy()
-        df_ing['horas_mensuales'] = df_ing['hrsocup'] * 4.345
-        df_ing_hrs = df_ing[df_ing['horas_mensuales'] > 0].copy()
-        df_ing_hrs['ingreso_hora'] = df_ing_hrs['ingocup'] / df_ing_hrs['horas_mensuales']
+    def get_sdemt_path(year, quarter):
+        y_short = str(year)[-2:]
+        base_dir = f"Data/ENOE_dta/ENOE_{year}_{quarter}"
+        candidates = [
+            f"ENOE_SDEMT{quarter}{y_short}.dta", f"ENOEN_SDEMT{quarter}{y_short}.dta",
+            f"SDEMT{quarter}{y_short}.dta", f"enoe_sdemt{quarter}{y_short}.dta"
+        ]
+        for c in candidates:
+            p = os.path.join(base_dir, c)
+            if os.path.exists(p): return p
+        return None
 
-        def weighted_avg(df_filtered, val_col):
-            if df_filtered.empty: return np.nan
-            val = df_filtered[val_col].values
-            wt = df_filtered[PONDERATOR].values
-            valid = ~np.isnan(val) & ~np.isnan(wt)
-            if not valid.any() or wt[valid].sum() == 0: return np.nan
-            return np.average(val[valid], weights=wt[valid])
+    def weighted_avg(df_filtered, val_col, wt_col):
+        if df_filtered.empty: return np.nan
+        val, wt = df_filtered[val_col].values, df_filtered[wt_col].values
+        valid = ~np.isnan(val) & ~np.isnan(wt)
+        if not valid.any() or wt[valid].sum() == 0: return np.nan
+        return np.average(val[valid], weights=wt[valid])
 
-        print("Calculando métricas agregadas por Grupo Principal (1 dígito)...")
-        resultados = []
-        
-        for cod in df_ocupados['codigo_1d'].unique():
-            g_total = df_ocupados[df_ocupados['codigo_1d'] == cod]
-            g_ing = df_ing[df_ing['codigo_1d'] == cod]
-            g_hrs = df_ing_hrs[df_ing_hrs['codigo_1d'] == cod]
+    # =========================================================================
+    # 2. EXTRACCIÓN Y AGREGACIÓN HISTÓRICA (2005-2025)
+    # =========================================================================
+    print("Iniciando extracción de Sectores y Ramas Económicas...")
+    resultados = []
+
+    for year in range(2005, 2026):
+        for quarter in range(1, 5):
+            if year == 2020 and quarter == 2: continue # Pandemia
             
-            personas_total = g_total[PONDERATOR].sum()
-            if personas_total == 0: continue
-            
-            # Conteo de observaciones (Muestra)
-            obs_total = len(g_total)
-            obs_ing_pos = len(g_ing)
-            
-            personas_formales = g_total[g_total['emp_ppal'] == 2][PONDERATOR].sum()
-            personas_informales = g_total[g_total['emp_ppal'] == 1][PONDERATOR].sum()
-            
-            personas_hombres = g_total[g_total['sex'] == 1][PONDERATOR].sum()
-            personas_mujeres = g_total[g_total['sex'] == 2][PONDERATOR].sum()
-            personas_ing_pos_p = g_ing[PONDERATOR].sum()
+            p_sdemt = get_sdemt_path(year, quarter)
+            if not p_sdemt: continue
                 
-            resultados.append({
-                'Código SINCO': cod,
-                'Personas (Total Ocupados)': personas_total,
-                '% de la PEA Ocupada': (personas_total / total_ocupados_nacional) * 100,
-                '%Formal': (personas_formales / personas_total) * 100 if personas_total > 0 else 0,
-                '%Informal': (personas_informales / personas_total) * 100 if personas_total > 0 else 0,
-                '%Hombres': (personas_hombres / personas_total) * 100 if personas_total > 0 else 0,
-                '%Mujeres': (personas_mujeres / personas_total) * 100 if personas_total > 0 else 0,
-                'Horas Mensuales Trabajadas': weighted_avg(g_hrs, 'horas_mensuales'),
-                'Ingreso Mensual Promedio': weighted_avg(g_ing, 'ingocup'),
-                'Ingreso x Hora (General)': weighted_avg(g_hrs, 'ingreso_hora'),
-                'Ingreso x Hora (Hombres)': weighted_avg(g_hrs[g_hrs['sex'] == 1], 'ingreso_hora'),
-                'Ingreso x Hora (Mujeres)': weighted_avg(g_hrs[g_hrs['sex'] == 2], 'ingreso_hora'),
-                'Personas con ingresos positivos': personas_ing_pos_p,
-                'Personas con ingresos positivos como % de Personas de la PEA Ocupada': (personas_ing_pos_p / personas_total) * 100 if personas_total > 0 else 0,
-                'Observaciones (Muestra Total)': obs_total,
-                'Observaciones (Muestra con Ingresos)': obs_ing_pos
-            })
+            try:
+                print(f"  Procesando {year}-T{quarter}...")
+                df = pd.read_stata(p_sdemt, convert_categoricals=False)
+                df.columns = df.columns.str.lower()
+                
+                PONDERATOR = 'fac_tri' if 'fac_tri' in df.columns else 'fac'
+                df[PONDERATOR] = pd.to_numeric(df[PONDERATOR], errors='coerce').fillna(0)
+                df['r_def'] = df['r_def'].astype(str).str.strip()
+                
+                # Universo PEA Ocupada
+                df_oc = df[(df['r_def'] == '0.0') & (df['c_res'].isin([1, 3])) & 
+                           (df['eda'] >= 15) & (df['clase1'] == 1) & (df['clase2'] == 1)].copy()
+                
+                df_oc['ingocup'] = pd.to_numeric(df_oc.get('ingocup', 0), errors='coerce').fillna(0)
+                
+                # 2.1 Mapeo de Sector (3 niveles)
+                s = pd.to_numeric(df_oc.get('rama_est2', 12), errors='coerce').fillna(12)
+                conds = [s == 1, s.isin([2, 3, 4]), s.isin([5, 6, 7, 8, 9, 10, 11])]
+                choices = ['Primario', 'Secundario', 'Terciario']
+                df_oc['Sector'] = np.select(conds, choices, default='No Especificado')
+                
+                # 2.2 Mapeo de Rama (11 niveles)
+                df_oc['Rama'] = s.map(dict_ramas).fillna('No Especificado')
+                
+                total_ocupados = df_oc[PONDERATOR].sum()
+                deflactor = DEFLACTOR_DICT.get((year, quarter), 100)
+                periodo_str = f"{year}-T{quarter}"
+                
+                # Agregación estructurada (Tidy Data)
+                def extraer_metricas(df_grupo, nombre_categoria, nivel):
+                    pob = df_grupo[PONDERATOR].sum()
+                    pct = (pob / total_ocupados * 100) if total_ocupados > 0 else 0
+                    
+                    df_ing = df_grupo[df_grupo['ingocup'] > 0]
+                    ing_nom = weighted_avg(df_ing, 'ingocup', PONDERATOR)
+                    ing_real = (ing_nom / deflactor * 100) if pd.notna(ing_nom) else np.nan
+                    
+                    if pob > 0:
+                        resultados.append({
+                            'Periodo': periodo_str,
+                            'Nivel_Clasificacion': nivel,
+                            'Categoria': nombre_categoria,
+                            'Poblacion_Ocupada': pob,
+                            'Porcentaje_PEA': pct,
+                            'Ingreso_Mensual_Real': ing_real
+                        })
+
+                # Extraer Sectores
+                for sector in ['Primario', 'Secundario', 'Terciario']:
+                    extraer_metricas(df_oc[df_oc['Sector'] == sector], sector, 'Sector')
+                
+                # Extraer Ramas
+                for rama in dict_ramas.values():
+                    extraer_metricas(df_oc[df_oc['Rama'] == rama], rama, 'Rama')
+
+            except Exception as e:
+                print(f"Error procesando {year}-T{quarter}: {e}")
+
+    df_res = pd.DataFrame(resultados)
+
+    # =========================================================================
+    # 3. FUNCIÓN GENERADORA DE GRÁFICAS (CON REGLAS ESTRICTAS DE FORMATO)
+    # =========================================================================
+    print("Generando gráficas de Sectores y Ramas...")
+    sns.set_theme(style="whitegrid")
+    ticks_to_show = [p for p in df_res['Periodo'].unique() if '-T1' in p or '-T3' in p]
+
+    def graficar_metrica(df_plot, metric_col, titulo, ylabel, is_pct, is_currency, archivo_salida):
+        fig, ax = plt.subplots(figsize=(16, 9))
+        
+        # Paleta de colores (usamos husl para que las 11 ramas se distingan bien)
+        categorias = df_plot['Categoria'].unique()
+        colores = sns.color_palette("husl", len(categorias))
+        
+        for i, cat in enumerate(categorias):
+            df_cat = df_plot[df_plot['Categoria'] == cat].sort_values('Periodo')
+            ax.plot(df_cat['Periodo'], df_cat[metric_col], label=cat, linewidth=3, color=colores[i])
+
+            # Rótulos en el primer y último periodo
+            if not df_cat.empty:
+                val_first = df_cat[metric_col].iloc[0]
+                val_last = df_cat[metric_col].iloc[-1]
+                
+                # Reglas de decimales según el tipo de métrica
+                if is_pct:
+                    fmt = "{:.1f}%"
+                elif is_currency:
+                    fmt = "${:,.0f}"
+                else: # Población
+                    fmt = "{:,.0f}" if val_first < 1000 else "{:,.0f}" 
+
+                ax.text(0, val_first, fmt.format(val_first) + " ", ha='right', va='center', 
+                        fontsize=9, fontweight='bold', color=colores[i])
+                ax.text(len(df_cat)-1, val_last, " " + fmt.format(val_last), ha='left', va='center', 
+                        fontsize=9, fontweight='bold', color=colores[i])
+
+        ax.set_title(titulo, fontsize=17, pad=20, fontweight='bold')
+        ax.set_ylabel(ylabel, fontsize=13)
+        ax.set_xticks(ticks_to_show)
+        ax.tick_params(axis='x', rotation=45)
+        
+        # Formato del eje Y para población (Millones)
+        if not is_pct and not is_currency:
+            ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x/1e6:.0f}M"))
             
-        # Ordenar de mayor a menor volumen de ocupados
-        df_res = pd.DataFrame(resultados).sort_values(by='Personas (Total Ocupados)', ascending=False)
+        # Leyenda de Pesos Constantes si aplica
+        if is_currency:
+            ax.text(0.01, 0.02, "Valores expresados en Pesos de 2018", transform=ax.transAxes, 
+                    ha='left', fontsize=11, style='italic', color='#555555')
+            
+        # Marca de agua de la plataforma
+        ax.text(0.99, 0.01, "www.mexicoendatos.org", transform=ax.transAxes, 
+                ha='right', fontsize=12, color='black', alpha=0.5)
+
+        # Ubicar leyenda fuera del gráfico para que no tape las 11 líneas
+        ax.legend(loc='center left', bbox_to_anchor=(1.05, 0.5), fontsize=11)
         
-        # =========================================================================
-        # 3. DICCIONARIO COMPLETO (SINCO a 1 Dígito)
-        # =========================================================================
-        cat_map_1d = {
-            '1': 'Funcionarios, directores y jefes',
-            '2': 'Profesionistas y técnicos',
-            '3': 'Trabajadores auxiliares en actividades administrativas',
-            '4': 'Comerciantes, empleados en ventas y agentes de ventas',
-            '5': 'Trabajadores en servicios personales y vigilancia',
-            '6': 'Trabajadores en actividades agrícolas, ganaderas, forestales, caza y pesca',
-            '7': 'Trabajadores artesanales, en la construcción y otros oficios',
-            '8': 'Operadores de maquinaria industrial, ensambladores, choferes y conductores de transporte',
-            '9': 'Trabajadores en actividades elementales y de apoyo',
-            '0': 'Ocupación no especificada / Nulos'
-        }
+        # Ajustar márgenes para que quepan los rótulos y la leyenda
+        ax.set_xlim(-1, len(df_cat) + 1)
+        plt.tight_layout()
         
-        df_res.insert(1, 'Grupo Profesional (Grupo Principal)', df_res['Código SINCO'].map(cat_map_1d).fillna("Grupo " + df_res['Código SINCO']))
+        # Guardar en el subdirectorio con el prefijo de fecha
+        ruta_completa = os.path.join(dir_graficas, f"{fecha_prefix}{archivo_salida}")
+        plt.savefig(ruta_completa, dpi=300, bbox_inches='tight')
+        plt.close(fig)
 
-        # =========================================================================
-        # 4. ORDEN FINAL Y FORMATO PARA GOOGLE SHEETS
-        # =========================================================================
-        columnas_finales = [
-            'Código SINCO',
-            'Grupo Profesional (Grupo Principal)',
-            'Personas (Total Ocupados)',
-            '% de la PEA Ocupada',
-            '%Formal',
-            '%Informal',
-            '%Hombres',
-            '%Mujeres',
-            'Horas Mensuales Trabajadas',
-            'Ingreso Mensual Promedio',
-            'Ingreso x Hora (General)',
-            'Ingreso x Hora (Hombres)',
-            'Ingreso x Hora (Mujeres)',
-            'Personas con ingresos positivos',
-            'Personas con ingresos positivos como % de Personas de la PEA Ocupada',
-            'Observaciones (Muestra Total)',
-            'Observaciones (Muestra con Ingresos)'
-        ]
-        
-        df_res = df_res[columnas_finales]
+    # Separar DataFrames por Nivel
+    df_sectores = df_res[df_res['Nivel_Clasificacion'] == 'Sector'].copy()
+    df_ramas = df_res[df_res['Nivel_Clasificacion'] == 'Rama'].copy()
 
-        # Formatear enteros
-        int_cols = [
-            'Personas (Total Ocupados)', 'Horas Mensuales Trabajadas', 'Ingreso Mensual Promedio',
-            'Ingreso x Hora (General)', 'Ingreso x Hora (Hombres)', 'Ingreso x Hora (Mujeres)',
-            'Personas con ingresos positivos', 'Observaciones (Muestra Total)', 'Observaciones (Muestra con Ingresos)'
-        ]
-        for col in int_cols:
-            df_res[col] = df_res[col].fillna(0).round(0).astype(int).astype(str)
+    # --- 3 GRÁFICAS DE SECTORES ---
+    graficar_metrica(df_sectores, 'Poblacion_Ocupada', 'Población Ocupada por Sector Económico (2005-2025)', 'Millones de Personas', False, False, "Sectores_1_Poblacion.png")
+    graficar_metrica(df_sectores, 'Porcentaje_PEA', 'Composición de la Fuerza Laboral por Sector', 'Porcentaje de la PEA Ocupada (%)', True, False, "Sectores_2_Porcentajes.png")
+    graficar_metrica(df_sectores, 'Ingreso_Mensual_Real', 'Ingreso Promedio por Sector', 'Ingreso Mensual ($ MXN)', False, True, "Sectores_3_Ingresos.png")
 
-        # Formatear porcentajes (1 decimal y coma)
-        pct_cols = [
-            '% de la PEA Ocupada', '%Formal', '%Informal', '%Hombres', '%Mujeres',
-            'Personas con ingresos positivos como % de Personas de la PEA Ocupada'
-        ]
-        for col in pct_cols:
-            df_res[col] = df_res[col].fillna(0).round(1).astype(str).str.replace('.', ',')
+    # --- 3 GRÁFICAS DE RAMAS ---
+    graficar_metrica(df_ramas, 'Poblacion_Ocupada', 'Población Ocupada por Rama de Actividad (2005-2025)', 'Millones de Personas', False, False, "Ramas_1_Poblacion.png")
+    graficar_metrica(df_ramas, 'Porcentaje_PEA', 'Composición de la Fuerza Laboral por Rama de Actividad', 'Porcentaje de la PEA Ocupada (%)', True, False, "Ramas_2_Porcentajes.png")
+    graficar_metrica(df_ramas, 'Ingreso_Mensual_Real', 'Ingreso Promedio por Rama de Actividad', 'Ingreso Mensual ($ MXN)', False, True, "Ramas_3_Ingresos.png")
 
-        # Exportar a CSV con punto y coma
-        output_filename = "Grupos_Profesionales_Agregados_1D_PEA_total_correcta.csv"
-        df_res.to_csv(output_filename, sep=';', index=False, encoding='utf-8-sig')
-        
-        print("\n" + "="*80)
-        print(" ¡ANÁLISIS A 1 DÍGITO COMPLETADO!")
-        print(" Se ha condensado toda la economía mexicana en los 9 Grandes Grupos.")
-        print("="*80 + "\n")
-        print(f"Archivo generado exitosamente: '{output_filename}'")
+    # =========================================================================
+    # 4. EXPORTACIÓN DE BASES A CSV (Formato LATAM)
+    # =========================================================================
+    # Pivoteamos la tabla para que sea más fácil de leer en Excel/Sheets
+    df_export = df_res.copy()
+    
+    # Formateo de números según tus reglas
+    df_export['Poblacion_Ocupada'] = df_export['Poblacion_Ocupada'].fillna(0).round(0).astype(int).astype(str)
+    df_export['Ingreso_Mensual_Real'] = df_export['Ingreso_Mensual_Real'].fillna(0).round(0).astype(int).astype(str)
+    df_export['Porcentaje_PEA'] = df_export['Porcentaje_PEA'].fillna(0).round(1).astype(str).str.replace('.', ',')
 
-    except Exception as e:
-        print(f"Ocurrió un error: {e}")
+    # Guardar en su respectivo subdirectorio con prefijo
+    ruta_csv = os.path.join(dir_bases, f"{fecha_prefix}Evolucion_Sectores_y_Ramas_LATAM.csv")
+    df_export.to_csv(ruta_csv, sep=';', index=False, encoding='utf-8-sig')
+    
+    print("\n" + "="*70)
+    print(" ¡PROCESO DE SECTORES Y RAMAS FINALIZADO!")
+    print(f" -> Las 6 gráficas se guardaron en: ./{dir_graficas}/")
+    print(f" -> La base de datos se guardó en: ./{dir_bases}/")
+    print("="*70)
 
 if __name__ == '__main__':
-    procesar_profesiones_1_digito_completo()
+    procesar_sectores_y_ramas_economicas()
